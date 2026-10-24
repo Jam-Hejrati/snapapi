@@ -2,5 +2,7 @@
 name = "SnapAPI"
 version = "0.1.0"
 edition = "2024"
-
-[dependencies]
+description = "Detect potentially breaking changes between OpenAPI specifications."
+license = "MIT"
+repository = "https://github.com/Jam-Hejrati/snapapi"
+readme = "README.md"
