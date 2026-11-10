@@ -8,7 +8,9 @@
 //! argument parsing and process exit, so the engine can be tested without the
 //! CLI.
 
+pub mod compare;
 pub mod exit;
 pub mod finding;
 pub mod input;
+pub mod model;
 pub mod policy;
