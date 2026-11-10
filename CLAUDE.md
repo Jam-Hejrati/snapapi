@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-SnapAPI is a Rust CLI (pre-implementation) that compares two OpenAPI specs — a **baseline** (current contract) and a **candidate** (proposed contract) — and reports potentially breaking changes. The project is being built in phases, following the approved plan in docs/PLAN.md §18. So far only the base types exist:
+SnapAPI is a Rust CLI (pre-implementation) that compares two OpenAPI specs — a **baseline** (current contract) and a **candidate** (proposed contract) — and reports potentially breaking changes. The project is being built in phases, following the approved plan in docs/PLAN.md §18. So far it has:
 - `finding::Severity` and `finding::Direction`;
 - `policy::FailOn`;
-- the `exit::Exit` codes.
+- the `exit::Exit` codes;
+- `input::load`, which reads a JSON or YAML file with a size limit, parses it into `serde_json::Value` (YAML through `serde-saphyr`, whose default budget guards against alias bombs and rejects duplicate keys), and accepts only `openapi` 3.0.x or 3.1.x. Every `InputError` maps to exit code 3.
 
 There is no command-line argument parsing yet. The full product spec, rules, and roadmap live in [docs/PLAN.md](docs/PLAN.md); read the relevant section there before implementing a feature, since it defines intended behavior.
 
@@ -19,7 +20,7 @@ Other docs:
   3. grouping findings by shared-schema change (the findings model must record both the underlying change and the operations it affects);
   4. git and monorepo workflows, after the beta.
 
-The language is Rust (edition 2024, MSRV 1.85). The decision to stay with Rust rather than move to Go is final. Rust parsing is done with SnapAPI's own model over `serde_json::Value` instead of an OpenAPI crate, because no crate handles both 3.0 and 3.1.
+The language is Rust (edition 2024, MSRV 1.89, set by serde-saphyr). The decision to stay with Rust rather than move to Go is final. Rust parsing is done with SnapAPI's own model over `serde_json::Value` instead of an OpenAPI crate, because no crate handles both 3.0 and 3.1.
 
 ## Commands
 
