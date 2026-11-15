@@ -1,6 +1,6 @@
 //! Operation matching and initial added/removed operation findings.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::finding::Severity;
 use crate::model::{ApiModel, Operation, OperationKey};
@@ -58,17 +58,21 @@ fn operation_finding(
     _other: Option<&Operation>,
 ) -> Finding {
     let identity = format!("{} {}", op.method.as_str().to_ascii_uppercase(), op.path);
+    let snapshot = json!({
+        "method": op.method.as_str(),
+        "path": op.path,
+    });
     let (before, after, summary, explanation) = if rule == "OPERATION_ADDED" {
         (
             None,
-            Some(op.raw.clone()),
+            Some(snapshot),
             "Operation added".to_owned(),
             "Existing clients are unaffected; the API now offers an additional operation."
                 .to_owned(),
         )
     } else {
         (
-            Some(op.raw.clone()),
+            Some(snapshot),
             None,
             "Operation removed".to_owned(),
             "Clients calling this operation may no longer be able to complete that interaction."
@@ -134,9 +138,11 @@ mod tests {
         assert_eq!(f[0].rule_id, "OPERATION_REMOVED");
         assert_eq!(f[0].severity, Severity::Breaking);
         assert!(f[0].before.is_some() && f[0].after.is_none());
+        assert_eq!(f[0].before, Some(json!({"method": "get", "path": "/z"})));
         assert_eq!(f[1].rule_id, "OPERATION_ADDED");
         assert_eq!(f[1].severity, Severity::Compatible);
         assert!(f[1].before.is_none() && f[1].after.is_some());
+        assert_eq!(f[1].after, Some(json!({"method": "post", "path": "/b"})));
         assert_eq!(f[1].affected_operations, vec!["POST /b"]);
     }
 }

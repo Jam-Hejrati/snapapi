@@ -1,0 +1,12 @@
+openapi: '3.0.3'
+info: {title: Ambiguous path ref, version: '1'}
+paths:
+  /users:
+    $ref: '#/components/pathItems/Users'
+    get:
+      responses: {}
+components:
+  pathItems:
+    Users:
+      get:
+        responses: {}

@@ -1,7 +1,13 @@
 //! Deterministic normalized representation of the supported OpenAPI surface.
+//!
+//! Structural reference objects (path items, parameters, request bodies and
+//! responses) are resolved locally and shallowly. Schema values are retained
+//! as written, including `$ref` fields, so recursive schema graphs can be
+//! compared later with visited-pair cycle protection instead of being eagerly
+//! expanded during normalization.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -53,6 +59,7 @@ impl HttpMethod {
             _ => return None,
         })
     }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Get => "get",
@@ -80,18 +87,22 @@ pub struct Parameter {
     pub required: Presence<Value>,
     pub schema: Presence<Schema>,
 }
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RequestBody {
     pub required: Presence<Value>,
     pub content: Presence<Value>,
 }
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     pub description: Presence<Value>,
     pub content: Presence<Value>,
 }
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Schema {
+    /// Raw schema JSON. Local schema references are intentionally not expanded.
     pub value: Value,
 }
 
@@ -124,11 +135,25 @@ pub enum ModelError {
         location: String,
         field: String,
     },
+    #[error("{source_path}: {location}: expected {expected} at {field}")]
+    InvalidField {
+        source_path: PathBuf,
+        location: String,
+        field: String,
+        expected: &'static str,
+    },
     #[error("{source_path}: unsupported remote $ref `{reference}` at {location}")]
     RemoteRef {
         source_path: PathBuf,
         location: String,
         reference: String,
+    },
+    #[error("{source_path}: unsupported local $ref `{reference}` at {location}: {reason}")]
+    UnsupportedLocalRef {
+        source_path: PathBuf,
+        location: String,
+        reference: String,
+        reason: &'static str,
     },
     #[error("{source_path}: unresolved local $ref `{reference}` at {location}")]
     UnresolvedRef {
@@ -136,51 +161,216 @@ pub enum ModelError {
         location: String,
         reference: String,
     },
-    #[error("{source_path}: cyclic $ref `{reference}` at {location}")]
+    #[error("{source_path}: cyclic structural $ref `{reference}` at {location}")]
     RefCycle {
         source_path: PathBuf,
         location: String,
         reference: String,
     },
+    #[error("{source_path}: ambiguous siblings beside Path Item $ref at {location}")]
+    AmbiguousPathItemRef {
+        source_path: PathBuf,
+        location: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StructuralRefKind {
+    PathItem,
+    ReferenceObject,
+}
+
+struct Resolver<'a> {
+    root: &'a Value,
+    source: &'a PathBuf,
+    version: OpenApiVersion,
+}
+
+impl Resolver<'_> {
+    fn resolve_path_item(&self, value: &Value, location: &str) -> Result<Value, ModelError> {
+        self.resolve(value, location, "path item", StructuralRefKind::PathItem)
+    }
+
+    fn resolve_reference_object(
+        &self,
+        value: &Value,
+        location: &str,
+        field: &str,
+    ) -> Result<Value, ModelError> {
+        self.resolve(value, location, field, StructuralRefKind::ReferenceObject)
+    }
+
+    fn resolve(
+        &self,
+        value: &Value,
+        location: &str,
+        field: &str,
+        kind: StructuralRefKind,
+    ) -> Result<Value, ModelError> {
+        let mut current = value.clone();
+        let mut seen = BTreeSet::new();
+        let mut overlays = Vec::new();
+
+        loop {
+            let object = current
+                .as_object()
+                .ok_or_else(|| ModelError::InvalidShape {
+                    source_path: self.source.clone(),
+                    location: location.into(),
+                    field: field.into(),
+                })?;
+            let Some(raw_reference) = object.get("$ref") else {
+                break;
+            };
+            let reference = raw_reference
+                .as_str()
+                .ok_or_else(|| ModelError::InvalidField {
+                    source_path: self.source.clone(),
+                    location: location.into(),
+                    field: "$ref".into(),
+                    expected: "a string",
+                })?;
+
+            if kind == StructuralRefKind::PathItem
+                && object
+                    .keys()
+                    .any(|key| key != "$ref" && !key.starts_with("x-"))
+            {
+                return Err(ModelError::AmbiguousPathItemRef {
+                    source_path: self.source.clone(),
+                    location: location.into(),
+                });
+            }
+
+            if kind == StructuralRefKind::ReferenceObject && self.version == OpenApiVersion::V3_1 {
+                let overlay = ["summary", "description"]
+                    .into_iter()
+                    .filter_map(|key| object.get(key).map(|value| (key.into(), value.clone())))
+                    .collect::<serde_json::Map<String, Value>>();
+                overlays.push(overlay);
+            }
+
+            let target = self.reference_target(reference, location, &mut seen)?;
+            current = target.clone();
+        }
+
+        if kind == StructuralRefKind::ReferenceObject
+            && self.version == OpenApiVersion::V3_1
+            && !overlays.is_empty()
+        {
+            let object = current
+                .as_object_mut()
+                .ok_or_else(|| ModelError::InvalidShape {
+                    source_path: self.source.clone(),
+                    location: location.into(),
+                    field: field.into(),
+                })?;
+            for overlay in overlays.into_iter().rev() {
+                object.extend(overlay);
+            }
+        }
+
+        Ok(current)
+    }
+
+    fn reference_target<'a>(
+        &'a self,
+        reference: &str,
+        location: &str,
+        seen: &mut BTreeSet<String>,
+    ) -> Result<&'a Value, ModelError> {
+        if !reference.starts_with('#') {
+            return Err(ModelError::RemoteRef {
+                source_path: self.source.clone(),
+                location: location.into(),
+                reference: reference.into(),
+            });
+        }
+        if reference.contains('%') {
+            return Err(ModelError::UnsupportedLocalRef {
+                source_path: self.source.clone(),
+                location: location.into(),
+                reference: reference.into(),
+                reason: "percent-encoded fragments are not supported",
+            });
+        }
+        let pointer = reference.strip_prefix('#').unwrap_or_default();
+        if !pointer.is_empty() && !pointer.starts_with('/') {
+            return Err(ModelError::UnsupportedLocalRef {
+                source_path: self.source.clone(),
+                location: location.into(),
+                reference: reference.into(),
+                reason: "expected a JSON Pointer fragment beginning with #/",
+            });
+        }
+        if !seen.insert(reference.into()) {
+            return Err(ModelError::RefCycle {
+                source_path: self.source.clone(),
+                location: location.into(),
+                reference: reference.into(),
+            });
+        }
+        self.root
+            .pointer(pointer)
+            .ok_or_else(|| ModelError::UnresolvedRef {
+                source_path: self.source.clone(),
+                location: location.into(),
+                reference: reference.into(),
+            })
+    }
 }
 
 pub fn normalize(document: &Document) -> Result<ApiModel, ModelError> {
     let source = document.source.clone();
     let root = &document.root;
-    let empty_location = String::new();
+    let resolver = Resolver {
+        root,
+        source: &source,
+        version: document.version,
+    };
     let paths = root
         .get("paths")
         .and_then(Value::as_object)
         .ok_or_else(|| ModelError::InvalidShape {
             source_path: source.clone(),
-            location: empty_location.clone(),
+            location: String::new(),
             field: "paths".into(),
         })?;
     let mut operations = BTreeMap::new();
-    for (path, item) in paths {
-        let path_obj = item.as_object().ok_or_else(|| ModelError::InvalidShape {
+
+    for (path, raw_item) in paths {
+        let path_location = format!("/paths/{}", escape(path));
+        let item = resolver.resolve_path_item(raw_item, &path_location)?;
+        let path_object = item.as_object().ok_or_else(|| ModelError::InvalidShape {
             source_path: source.clone(),
-            location: format!("/paths/{}", escape(path)),
+            location: path_location.clone(),
             field: "path item".into(),
         })?;
-        for (method_text, raw) in path_obj {
+        let path_parameters =
+            parse_parameters(path_object.get("parameters"), &resolver, &path_location)?;
+
+        for (method_text, raw_operation) in path_object {
             let Some(method) = HttpMethod::parse(method_text) else {
                 continue;
             };
-            let location = format!("/paths/{}/{}", escape(path), method_text);
-            let resolved = resolve_tree(root, raw, &source, &location, &mut BTreeSet::new())?;
+            let location = format!("{path_location}/{method_text}");
+            let object = raw_operation
+                .as_object()
+                .ok_or_else(|| ModelError::InvalidShape {
+                    source_path: source.clone(),
+                    location: location.clone(),
+                    field: "operation".into(),
+                })?;
+            let operation_parameters =
+                parse_parameters(object.get("parameters"), &resolver, &location)?;
+            let parameters = merge_parameters(&path_parameters, operation_parameters);
+            let request_body = parse_request_body(object.get("requestBody"), &resolver, &location)?;
+            let responses = parse_responses(object.get("responses"), &resolver, &location)?;
             let key = OperationKey {
                 method,
                 path_shape: path_shape(path),
             };
-            let object = resolved
-                .as_object()
-                .expect("resolved operation retains object shape");
-            let parameters = parse_parameters(object.get("parameters"), root, &source, &location)?;
-            let request_body =
-                parse_request_body(object.get("requestBody"), root, &source, &location)?;
-            let responses = parse_responses(object.get("responses"), root, &source, &location)?;
-            let op = Operation {
+            let operation = Operation {
                 key: key.clone(),
                 method,
                 path: path.clone(),
@@ -190,17 +380,18 @@ pub fn normalize(document: &Document) -> Result<ApiModel, ModelError> {
                 parameters,
                 request_body,
                 responses,
-                raw: resolved,
+                raw: raw_operation.clone(),
             };
-            if operations.insert(key.clone(), op).is_some() {
+            if operations.insert(key, operation).is_some() {
                 return Err(ModelError::InvalidShape {
                     source_path: source.clone(),
-                    location: format!("/paths/{}", escape(path)),
+                    location: path_location,
                     field: "duplicate operation path shape".into(),
                 });
             }
         }
     }
+
     Ok(ApiModel {
         version: document.version,
         source,
@@ -210,8 +401,7 @@ pub fn normalize(document: &Document) -> Result<ApiModel, ModelError> {
 
 fn parse_parameters(
     raw: Option<&Value>,
-    root: &Value,
-    source: &PathBuf,
+    resolver: &Resolver<'_>,
     at: &str,
 ) -> Result<Presence<BTreeMap<String, Parameter>>, ModelError> {
     let Some(raw) = raw else {
@@ -220,48 +410,102 @@ fn parse_parameters(
     if raw.is_null() {
         return Ok(Presence::Null);
     }
-    let Some(array) = raw.as_array() else {
-        return Err(ModelError::InvalidShape {
-            source_path: source.clone(),
-            location: at.into(),
-            field: "parameters".into(),
-        });
-    };
+    let array = raw.as_array().ok_or_else(|| ModelError::InvalidShape {
+        source_path: resolver.source.clone(),
+        location: at.into(),
+        field: "parameters".into(),
+    })?;
     let mut result = BTreeMap::new();
-    for (i, p) in array.iter().enumerate() {
-        let loc = format!("{at}/parameters/{i}");
-        let p = resolve_tree(root, p, source, &loc, &mut BTreeSet::new())?;
-        let o = p.as_object().ok_or_else(|| ModelError::InvalidShape {
-            source_path: source.clone(),
-            location: loc.clone(),
-            field: "parameter".into(),
-        })?;
-        let name = Presence::from_object(o, "name");
-        let locn = Presence::from_object(o, "in");
-        let key = format!("{}:{}", value_key(&name), value_key(&locn));
+
+    for (index, raw_parameter) in array.iter().enumerate() {
+        let location = format!("{at}/parameters/{index}");
+        let parameter = resolver.resolve_reference_object(raw_parameter, &location, "parameter")?;
+        let object = parameter
+            .as_object()
+            .ok_or_else(|| ModelError::InvalidShape {
+                source_path: resolver.source.clone(),
+                location: location.clone(),
+                field: "parameter".into(),
+            })?;
+        let name = required_string(object, "name", resolver.source, &location)?;
+        let parameter_location = required_string(object, "in", resolver.source, &location)?;
+        let key = parameter_key(&name, &parameter_location);
         result.insert(
             key,
             Parameter {
-                name,
-                location: locn,
-                required: Presence::from_object(o, "required"),
-                schema: parse_schema_presence(o.get("schema"))?,
+                name: Presence::Value(Value::String(name)),
+                location: Presence::Value(Value::String(parameter_location)),
+                required: Presence::from_object(object, "required"),
+                schema: parse_schema_presence(object.get("schema")),
             },
         );
     }
+
     Ok(Presence::Value(result))
 }
-fn parse_schema_presence(raw: Option<&Value>) -> Result<Presence<Schema>, ModelError> {
-    Ok(match raw {
+
+fn required_string(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    source: &Path,
+    location: &str,
+) -> Result<String, ModelError> {
+    object
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| ModelError::InvalidField {
+            source_path: source.to_path_buf(),
+            location: location.into(),
+            field: field.into(),
+            expected: "a string",
+        })
+}
+
+fn parameter_key(name: &str, location: &str) -> String {
+    let normalized_name = if location.eq_ignore_ascii_case("header") {
+        name.to_ascii_lowercase()
+    } else {
+        name.to_owned()
+    };
+    format!(
+        "{}:{}",
+        Value::String(location.to_owned()),
+        Value::String(normalized_name)
+    )
+}
+
+fn merge_parameters(
+    inherited: &Presence<BTreeMap<String, Parameter>>,
+    operation: Presence<BTreeMap<String, Parameter>>,
+) -> Presence<BTreeMap<String, Parameter>> {
+    match operation {
+        Presence::Absent => inherited.clone(),
+        Presence::Null => Presence::Null,
+        Presence::Value(operation_parameters) => {
+            let mut merged = match inherited {
+                Presence::Value(parameters) => parameters.clone(),
+                Presence::Absent | Presence::Null => BTreeMap::new(),
+            };
+            merged.extend(operation_parameters);
+            Presence::Value(merged)
+        }
+    }
+}
+
+fn parse_schema_presence(raw: Option<&Value>) -> Presence<Schema> {
+    match raw {
         None => Presence::Absent,
         Some(Value::Null) => Presence::Null,
-        Some(v) => Presence::Value(Schema { value: v.clone() }),
-    })
+        Some(value) => Presence::Value(Schema {
+            value: value.clone(),
+        }),
+    }
 }
+
 fn parse_request_body(
     raw: Option<&Value>,
-    root: &Value,
-    source: &PathBuf,
+    resolver: &Resolver<'_>,
     at: &str,
 ) -> Result<Presence<RequestBody>, ModelError> {
     let Some(raw) = raw else {
@@ -270,22 +514,24 @@ fn parse_request_body(
     if raw.is_null() {
         return Ok(Presence::Null);
     }
-    let loc = format!("{at}/requestBody");
-    let v = resolve_tree(root, raw, source, &loc, &mut BTreeSet::new())?;
-    let o = v.as_object().ok_or_else(|| ModelError::InvalidShape {
-        source_path: source.clone(),
-        location: loc,
-        field: "requestBody".into(),
-    })?;
+    let location = format!("{at}/requestBody");
+    let request_body = resolver.resolve_reference_object(raw, &location, "requestBody")?;
+    let object = request_body
+        .as_object()
+        .ok_or_else(|| ModelError::InvalidShape {
+            source_path: resolver.source.clone(),
+            location: location.clone(),
+            field: "requestBody".into(),
+        })?;
     Ok(Presence::Value(RequestBody {
-        required: Presence::from_object(o, "required"),
-        content: Presence::from_object(o, "content"),
+        required: Presence::from_object(object, "required"),
+        content: Presence::from_object(object, "content"),
     }))
 }
+
 fn parse_responses(
     raw: Option<&Value>,
-    root: &Value,
-    source: &PathBuf,
+    resolver: &Resolver<'_>,
     at: &str,
 ) -> Result<Presence<BTreeMap<String, Response>>, ModelError> {
     let Some(raw) = raw else {
@@ -294,113 +540,50 @@ fn parse_responses(
     if raw.is_null() {
         return Ok(Presence::Null);
     }
-    let o = raw.as_object().ok_or_else(|| ModelError::InvalidShape {
-        source_path: source.clone(),
+    let object = raw.as_object().ok_or_else(|| ModelError::InvalidShape {
+        source_path: resolver.source.clone(),
         location: format!("{at}/responses"),
         field: "responses".into(),
     })?;
     let mut result = BTreeMap::new();
-    for (code, r) in o {
-        let loc = format!("{at}/responses/{}", escape(code));
-        let v = resolve_tree(root, r, source, &loc, &mut BTreeSet::new())?;
-        let o = v.as_object().ok_or_else(|| ModelError::InvalidShape {
-            source_path: source.clone(),
-            location: loc.clone(),
-            field: "response".into(),
-        })?;
+
+    for (code, raw_response) in object {
+        let location = format!("{at}/responses/{}", escape(code));
+        let response = resolver.resolve_reference_object(raw_response, &location, "response")?;
+        let object = response
+            .as_object()
+            .ok_or_else(|| ModelError::InvalidShape {
+                source_path: resolver.source.clone(),
+                location: location.clone(),
+                field: "response".into(),
+            })?;
         result.insert(
             code.clone(),
             Response {
-                description: Presence::from_object(o, "description"),
-                content: Presence::from_object(o, "content"),
+                description: Presence::from_object(object, "description"),
+                content: Presence::from_object(object, "content"),
             },
         );
     }
+
     Ok(Presence::Value(result))
 }
-fn value_key(v: &Presence<Value>) -> String {
-    match v {
-        Presence::Absent => "absent".into(),
-        Presence::Null => "null".into(),
-        Presence::Value(v) => v.to_string(),
-    }
-}
 
-fn resolve_tree(
-    root: &Value,
-    value: &Value,
-    source: &PathBuf,
-    location: &str,
-    seen: &mut BTreeSet<String>,
-) -> Result<Value, ModelError> {
-    if let Some(reference) = value.get("$ref").and_then(Value::as_str) {
-        if !reference.starts_with('#') {
-            return Err(ModelError::RemoteRef {
-                source_path: source.clone(),
-                location: location.into(),
-                reference: reference.into(),
-            });
-        }
-        if !seen.insert(reference.into()) {
-            return Err(ModelError::RefCycle {
-                source_path: source.clone(),
-                location: location.into(),
-                reference: reference.into(),
-            });
-        }
-        let pointer = reference.strip_prefix('#').unwrap_or("");
-        let target = root
-            .pointer(pointer)
-            .ok_or_else(|| ModelError::UnresolvedRef {
-                source_path: source.clone(),
-                location: location.into(),
-                reference: reference.into(),
-            })?;
-        let mut resolved = resolve_tree(root, target, source, location, seen)?;
-        seen.remove(reference);
-        if let (Some(base), Some(extra)) = (resolved.as_object_mut(), value.as_object()) {
-            for (k, v) in extra {
-                if k != "$ref" {
-                    base.insert(k.clone(), v.clone());
-                }
-            }
-        }
-        return Ok(resolved);
-    }
-    match value {
-        Value::Array(a) => Ok(Value::Array(
-            a.iter()
-                .enumerate()
-                .map(|(i, v)| resolve_tree(root, v, source, &format!("{location}/{i}"), seen))
-                .collect::<Result<_, _>>()?,
-        )),
-        Value::Object(o) => {
-            let mut out = serde_json::Map::new();
-            for (k, v) in o {
-                out.insert(
-                    k.clone(),
-                    resolve_tree(root, v, source, &format!("{location}/{}", escape(k)), seen)?,
-                );
-            }
-            Ok(Value::Object(out))
-        }
-        _ => Ok(value.clone()),
-    }
-}
 fn escape(token: &str) -> String {
     token.replace('~', "~0").replace('/', "~1")
 }
+
 pub fn path_shape(path: &str) -> String {
     let mut out = String::new();
     let mut in_param = false;
-    for c in path.chars() {
-        match c {
+    for character in path.chars() {
+        match character {
             '{' => {
                 in_param = true;
                 out.push_str("{}")
             }
             '}' => in_param = false,
-            _ if !in_param => out.push(c),
+            _ if !in_param => out.push(character),
             _ => {}
         }
     }
@@ -410,18 +593,21 @@ pub fn path_shape(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn shape_ignores_parameter_names() {
         assert_eq!(path_shape("/users/{id}"), path_shape("/users/{userId}"));
     }
+
     #[test]
     fn shape_preserves_literals() {
         assert_ne!(path_shape("/users/{id}"), path_shape("/accounts/{id}"));
     }
+
     #[test]
     fn pointer_escape_matches_json_pointer() {
         let root = serde_json::json!({"components":{"schemas":{"a/b~c":{"type":"string"}}}});
-        let p = root.pointer("/components/schemas/a~1b~0c").unwrap();
-        assert_eq!(p["type"], "string");
+        let pointer = root.pointer("/components/schemas/a~1b~0c").unwrap();
+        assert_eq!(pointer["type"], "string");
     }
 }

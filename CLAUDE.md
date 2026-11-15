@@ -8,7 +8,11 @@ SnapAPI is a Rust CLI (pre-implementation) that compares two OpenAPI specs — a
 - `finding::Severity` and `finding::Direction`;
 - `policy::FailOn`;
 - the `exit::Exit` codes;
-- `input::load`, which reads a JSON or YAML file with a size limit, parses it into `serde_json::Value` (YAML through `serde-saphyr`, whose default budget guards against alias bombs and rejects duplicate keys), and accepts only `openapi` 3.0.x or 3.1.x. Every `InputError` maps to exit code 3.
+- `input::load`, which reads a JSON or YAML file with a size limit, parses it into `serde_json::Value` (YAML through `serde-saphyr`, whose default budget guards against alias bombs and rejects duplicate keys), and accepts only `openapi` 3.0.x or 3.1.x. Every `InputError` maps to exit code 3;
+- `model::normalize`, which indexes operations deterministically, resolves supported local structural references, inherits path-level parameters, and retains schema `$ref`s without expanding recursive schema graphs;
+- operation matching by HTTP method plus path shape, with initial `OPERATION_ADDED` and `OPERATION_REMOVED` findings.
+
+Remote references are rejected and never fetched. Structural reference cycles are errors; schema cycles are retained for the later recursive comparison stage, which will track visited baseline/candidate schema pairs.
 
 There is no command-line argument parsing yet. The full product spec, rules, and roadmap live in [docs/PLAN.md](docs/PLAN.md); read the relevant section there before implementing a feature, since it defines intended behavior.
 

@@ -1,5 +1,6 @@
 //! Integration tests for loading documents from disk.
 
+// use std::path::PathBuf;
 use std::path::PathBuf;
 
 use snapapi::input::{Format, InputError, LoadOptions, OpenApiVersion, load};
