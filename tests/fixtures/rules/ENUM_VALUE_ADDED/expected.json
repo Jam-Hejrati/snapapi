@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "ENUM_VALUE_ADDED",
+    "severity": "review"
+  }
+]

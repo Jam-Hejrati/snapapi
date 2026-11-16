@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "SCHEMA_CHANGED",
+    "severity": "review"
+  }
+]

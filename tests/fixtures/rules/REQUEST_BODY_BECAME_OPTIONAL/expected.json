@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "REQUEST_BODY_BECAME_OPTIONAL",
+    "severity": "compatible"
+  }
+]

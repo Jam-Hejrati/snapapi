@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "COMPOSITION_CHANGED",
+    "severity": "review"
+  }
+]

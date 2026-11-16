@@ -1,0 +1,7 @@
+openapi: '3.0.3'
+info: {title: Unresolved ref, version: '1'}
+paths:
+  /users:
+    $ref: '#/components/pathItems/Missing'
+components:
+  pathItems: {}

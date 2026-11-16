@@ -1,0 +1,11 @@
+openapi: '3.0.3'
+info: {title: Structural cycle, version: '1'}
+paths:
+  /users:
+    $ref: '#/components/pathItems/A'
+components:
+  pathItems:
+    A:
+      $ref: '#/components/pathItems/B'
+    B:
+      $ref: '#/components/pathItems/A'

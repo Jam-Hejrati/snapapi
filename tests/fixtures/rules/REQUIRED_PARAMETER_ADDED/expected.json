@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "REQUIRED_PARAMETER_ADDED",
+    "severity": "breaking"
+  }
+]

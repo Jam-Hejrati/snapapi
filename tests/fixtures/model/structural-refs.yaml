@@ -1,0 +1,62 @@
+openapi: '3.1.0'
+info:
+  title: Structural references
+  version: '1'
+paths:
+  /users:
+    $ref: '#/components/pathItems/Users'
+components:
+  pathItems:
+    Users:
+      parameters:
+        - $ref: '#/components/parameters/Trace'
+        - name: Filter
+          in: query
+          schema:
+            type: string
+      post:
+        parameters:
+          - name: x-trace-id
+            in: header
+            required: true
+            schema:
+              $ref: '#/components/schemas/TraceId'
+          - name: filter
+            in: query
+            schema:
+              type: string
+        requestBody:
+          $ref: '#/components/requestBodies/CreateUser'
+        responses:
+          '201':
+            $ref: '#/components/responses/Created'
+            description: created override
+  parameters:
+    Trace:
+      name: X-Trace-ID
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/TraceId'
+  requestBodies:
+    CreateUser:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/User'
+  responses:
+    Created:
+      description: created
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/User'
+  schemas:
+    TraceId:
+      type: string
+    User:
+      type: object
+      properties:
+        manager:
+          $ref: '#/components/schemas/User'
