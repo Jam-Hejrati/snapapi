@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "CONSTRAINT_TIGHTENED",
+    "severity": "breaking"
+  }
+]

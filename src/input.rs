@@ -145,7 +145,7 @@ pub fn parse(source: &Path, text: &str) -> Result<Document, InputError> {
     })
 }
 
-fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, InputError> {
+pub(crate) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>, InputError> {
     let read_err = |source| InputError::Read {
         path: path.to_owned(),
         source,
@@ -183,13 +183,15 @@ fn detect_format(source: &Path, text: &str) -> Format {
 }
 
 fn parse_json(source: &Path, text: &str) -> Result<Value, InputError> {
-    serde_json::from_str(text).map_err(|e| InputError::Parse {
-        path: source.to_owned(),
-        format: Format::Json,
-        message: strip_json_location(&e.to_string()),
-        line: Some(e.line() as u64),
-        column: Some(e.column() as u64),
-    })
+    serde_json::from_str::<crate::json::UniqueValue>(text)
+        .map(|v| v.0)
+        .map_err(|e| InputError::Parse {
+            path: source.to_owned(),
+            format: Format::Json,
+            message: strip_json_location(&e.to_string()),
+            line: Some(e.line() as u64),
+            column: Some(e.column() as u64),
+        })
 }
 
 /// `serde_json` appends " at line X column Y" to its messages; we report the
@@ -247,9 +249,12 @@ fn check_version(source: &Path, root: &Value) -> Result<(OpenApiVersion, String)
     let Some(version) = raw.as_str() else {
         return Err(InputError::VersionNotString { path: path() });
     };
-    let parsed = match version.split('.').collect::<Vec<_>>().as_slice() {
-        ["3", "0", patch] if is_patch(patch) => Some(OpenApiVersion::V3_0),
-        ["3", "1", patch] if is_patch(patch) => Some(OpenApiVersion::V3_1),
+    let parsed = match semver::Version::parse(version)
+        .ok()
+        .map(|v| (v.major, v.minor))
+    {
+        Some((3, 0)) => Some(OpenApiVersion::V3_0),
+        Some((3, 1)) => Some(OpenApiVersion::V3_1),
         _ => None,
     };
     match parsed {
@@ -259,13 +264,6 @@ fn check_version(source: &Path, root: &Value) -> Result<(OpenApiVersion, String)
             found: version.to_owned(),
         }),
     }
-}
-
-/// A patch component is digits, optionally followed by a pre-release suffix
-/// such as `0-rc1`.
-fn is_patch(patch: &str) -> bool {
-    let digits = patch.split('-').next().unwrap_or("");
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 #[cfg(test)]

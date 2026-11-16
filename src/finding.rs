@@ -4,7 +4,8 @@
 ///
 /// Variants are ordered from least to most severe, so `Ord` comparisons can be
 /// used by the exit policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
     /// Documentation-only change (descriptions, examples).
     Informational,
@@ -31,7 +32,8 @@ impl Severity {
 ///
 /// Compatibility is direction-aware: narrowing what a request accepts breaks
 /// clients, while narrowing what a response returns usually does not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Direction {
     Request,
     Response,

@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "CONSTRAINT_LOOSENED",
+    "severity": "review"
+  }
+]

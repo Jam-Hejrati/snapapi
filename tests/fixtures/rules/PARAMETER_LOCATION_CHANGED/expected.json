@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "PARAMETER_LOCATION_CHANGED",
+    "severity": "breaking"
+  }
+]

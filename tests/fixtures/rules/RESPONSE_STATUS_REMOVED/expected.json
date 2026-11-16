@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "RESPONSE_STATUS_REMOVED",
+    "severity": "breaking"
+  }
+]

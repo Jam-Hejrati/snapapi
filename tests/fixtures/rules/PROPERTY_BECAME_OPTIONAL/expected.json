@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "PROPERTY_BECAME_OPTIONAL",
+    "severity": "breaking"
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Audit regressions",
+    "version": "1"
+  },
+  "paths": {
+    "/users": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "x-string": "frontend",
+          "x-object": {
+            "owner": "frontend"
+          }
+        }
+      }
+    },
+    "x-owner": "frontend"
+  }
+}

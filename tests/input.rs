@@ -1,6 +1,5 @@
 //! Integration tests for loading documents from disk.
 
-// use std::path::PathBuf;
 use std::path::PathBuf;
 
 use snapapi::input::{Format, InputError, LoadOptions, OpenApiVersion, load};
@@ -94,4 +93,37 @@ fn file_exactly_at_limit_is_accepted() {
     let path = fixture("valid-3.0.yaml");
     let size = std::fs::metadata(&path).unwrap().len();
     assert!(load(&path, &LoadOptions { max_bytes: size }).is_ok());
+}
+
+#[test]
+fn duplicate_json_keys_are_rejected_at_every_depth() {
+    assert!(matches!(
+        load_default("duplicate-keys.json"),
+        Err(InputError::Parse { .. })
+    ));
+    for text in [
+        r#"{"openapi":"3.1.0","nested":{"a":1,"a":2}}"#,
+        r#"{"openapi":"3.1.0","nested":[{"a":null,"a":false}]}"#,
+    ] {
+        let error =
+            snapapi::input::parse(std::path::Path::new("duplicate.json"), text).unwrap_err();
+        assert!(error.to_string().contains("duplicate object key"));
+    }
+}
+
+#[test]
+fn versions_must_be_complete_semantic_versions() {
+    for version in [
+        "3.1.0-",
+        "3.1.0-not a version!",
+        "3.1.00",
+        "3.1.0-a..b",
+        "3.1.0-01",
+    ] {
+        let text = format!("openapi: '{version}'\n");
+        assert!(matches!(
+            snapapi::input::parse(std::path::Path::new("version.yaml"), &text),
+            Err(InputError::UnsupportedVersion { .. })
+        ));
+    }
 }

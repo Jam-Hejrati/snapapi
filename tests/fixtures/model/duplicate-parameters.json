@@ -1,0 +1,30 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Audit regressions",
+    "version": "1"
+  },
+  "paths": {
+    "/users": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false
+          }
+        ]
+      }
+    }
+  }
+}

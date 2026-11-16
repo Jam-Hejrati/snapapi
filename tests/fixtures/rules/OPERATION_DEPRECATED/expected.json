@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "OPERATION_DEPRECATED",
+    "severity": "informational"
+  }
+]

@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "REQUEST_MEDIA_TYPE_ADDED",
+    "severity": "compatible"
+  }
+]

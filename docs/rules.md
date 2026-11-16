@@ -1,6 +1,6 @@
 # SnapAPI v1 compatibility rules
 
-This is the starting rule set, copied from the decisions in the approved implementation plan. Every rule has a stable ID. Once released, an ID must never be renamed or reused.
+These rules are implemented and tested with individual modules, [per-rule documentation](rules/), and fixture pairs. Defaults follow the approved implementation plan. Every rule has a stable ID. Once released, an ID must never be renamed or reused.
 
 **Direction:**
 - `req`: the rule applies to what the API accepts (parameters, request bodies).
@@ -19,6 +19,8 @@ This is the starting rule set, copied from the decisions in the approved impleme
 | `OPERATION_ADDED` | op | compatible | Existing operations are unaffected. |
 | `OPERATION_DEPRECATED` | op | informational | The operation still works. Consumers should plan to migrate. |
 | `SECURITY_REQUIREMENT_ADDED` | op | breaking | Anonymous callers that worked before may now be rejected. |
+| `SECURITY_REQUIREMENT_REMOVED` | op | compatible | Anonymous requests become allowed. |
+| `SECURITY_REQUIREMENT_CHANGED` | op | review | Scheme/scope impact depends on authorization policy. |
 
 ## Parameters (path, query, header, cookie)
 
@@ -36,6 +38,7 @@ This is the starting rule set, copied from the decisions in the approved impleme
 | ID | Dir | Default | Assumption |
 |---|---|---|---|
 | `REQUEST_BODY_BECAME_REQUIRED` | req | breaking | Requests without a body may be rejected. |
+| `REQUEST_BODY_BECAME_OPTIONAL` | req | compatible | Requests may now omit the body. |
 | `REQUEST_MEDIA_TYPE_REMOVED` | req | breaking | Clients sending that content type may be rejected. |
 | `REQUEST_MEDIA_TYPE_ADDED` | req | compatible | The API accepts more content types than before. |
 
@@ -46,6 +49,7 @@ This is the starting rule set, copied from the decisions in the approved impleme
 | `RESPONSE_STATUS_REMOVED` | resp | breaking | Clients may depend on handling that status code. *(This was "breaking or review" in the plan; it was set to breaking.)* |
 | `RESPONSE_STATUS_ADDED` | resp | review | Clients may not handle the new status code. |
 | `RESPONSE_MEDIA_TYPE_REMOVED` | resp | breaking | Clients that negotiate that content type lose it. |
+| `RESPONSE_MEDIA_TYPE_ADDED` | resp | review | Clients may not decode the new representation. |
 
 ## Schemas
 
@@ -62,8 +66,10 @@ Schema rules apply to the schemas of parameters, request bodies, and responses. 
 | `ENUM_VALUE_ADDED` | compatible | review | Responses: clients may handle enum values with an exhaustive switch. |
 | `BECAME_NULLABLE` | compatible | breaking | Responses: clients may assume the value is never `null`. *(This was "breaking or review" in the plan; it was set to breaking.)* |
 | `BECAME_NON_NULLABLE` | breaking | compatible | Requests: clients sending `null` may be rejected. |
-| `CONSTRAINT_TIGHTENED` | breaking | compatible | Covers min/max, minLength/maxLength, pattern, and minItems/maxItems. |
+| `CONSTRAINT_TIGHTENED` | breaking | compatible | Covers min/max, lengths, item/property counts, uniqueItems, additionalProperties, and pattern addition/removal. Arbitrary pattern replacements, exclusive bounds, and divisibility use `SCHEMA_CHANGED`. |
 | `CONSTRAINT_LOOSENED` | compatible | review | Responses: clients may rely on the old limits. |
+| `COMPOSITION_CHANGED` | review | review | Full composition semantics require human review. |
+| `SCHEMA_CHANGED` | review | review | Boolean/null schemas, uncertain presence or constraint changes, and unsupported schema semantics need review. |
 
 ¹ In a request, removing a property is breaking only when the schema rejects unknown properties (`additionalProperties: false`). Otherwise it is `review`.
 ² In a request, adding a property is compatible when the new property is optional. A newly added *required* property is reported as `PROPERTY_BECAME_REQUIRED`.
@@ -82,5 +88,8 @@ Nullability is read differently in each OpenAPI version:
 - Callbacks.
 - Webhooks (3.1).
 - Links.
+- Authentication scheme definitions (security requirements themselves are compared).
 - Detailed semantics of `allOf`/`oneOf`/`anyOf` beyond simple nullability. A change inside these is reported as a single `review` finding.
 - Swagger 2.0.
+
+Parameter serialization (`style`, `explode`, `allowReserved`, `allowEmptyValue`), response headers, media encoding, and additional JSON Schema keywords are disclosed through structured diagnostics. Default/example values are redacted. Classification remains separate from exit policy.

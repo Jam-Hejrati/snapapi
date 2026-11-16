@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "BECAME_NON_NULLABLE",
+    "severity": "breaking"
+  }
+]

@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "RESPONSE_MEDIA_TYPE_REMOVED",
+    "severity": "breaking"
+  }
+]

@@ -1,0 +1,6 @@
+[
+  {
+    "rule_id": "SCHEMA_TYPE_CHANGED",
+    "severity": "breaking"
+  }
+]

@@ -214,3 +214,105 @@ fn duplicate_path_shapes_are_rejected() {
     assert!(matches!(error, ModelError::InvalidShape { .. }));
     assert!(error.to_string().contains("duplicate operation path shape"));
 }
+
+#[test]
+fn audit_regression_fixtures() {
+    assert!(matches!(
+        load(&fixture("invalid-version.json"), &LoadOptions::default()),
+        Err(snapapi::input::InputError::UnsupportedVersion { .. })
+    ));
+    let extended = normalize_fixture("extensions.json").unwrap();
+    assert_eq!(extended.operations.len(), 1);
+    let Presence::Value(responses) = &extended.operations.values().next().unwrap().responses else {
+        panic!("responses missing")
+    };
+    assert_eq!(responses.keys().collect::<Vec<_>>(), ["200"]);
+    assert!(matches!(
+        normalize_fixture("duplicate-parameters.json"),
+        Err(ModelError::DuplicateParameter { .. })
+    ));
+    assert!(matches!(
+        normalize_fixture("malformed-fields.json"),
+        Err(ModelError::InvalidField { .. })
+    ));
+    assert!(matches!(
+        normalize_fixture("remote-schema.json"),
+        Err(ModelError::RemoteRef { .. })
+    ));
+    assert!(matches!(
+        normalize_fixture("unresolved-schema.json"),
+        Err(ModelError::UnresolvedRef { .. })
+    ));
+    let components = normalize_fixture("components-only.json").unwrap();
+    assert!(components.operations.is_empty());
+    assert_eq!(
+        components.root.pointer("/components/schemas/User/type"),
+        Some(&json!("string"))
+    );
+    let unsupported = normalize_fixture("unsupported-webhooks.json").unwrap();
+    assert_eq!(unsupported.diagnostics[0].feature, "webhooks");
+    assert_eq!(unsupported.diagnostics[0].location, "/webhooks");
+}
+
+#[test]
+fn malformed_supported_field_types_are_rejected_individually() {
+    let base = json!({"openapi":"3.1.0","paths":{"/x":{"get":{"parameters":[{"name":"id","in":"query","schema":{"type":"string"}}],"requestBody":{"content":{"application/json":{"schema":{"type":"string"}}}},"responses":{"200":{"description":"ok"}}}}}});
+    for (pointer, bad) in [
+        ("/paths/~1x/get/parameters/0/in", json!("nowhere")),
+        ("/paths/~1x/get/parameters/0/required", json!("yes")),
+        ("/paths/~1x/get/parameters/0/schema", json!("broken")),
+        ("/paths/~1x/get/requestBody/required", json!("yes")),
+        ("/paths/~1x/get/requestBody/content", json!("broken")),
+        (
+            "/paths/~1x/get/requestBody/content/application~1json/schema/type",
+            json!(12),
+        ),
+        ("/paths/~1x/get/responses/200/description", json!(12)),
+    ] {
+        let mut doc = base.clone();
+        let (parent, field) = pointer.rsplit_once('/').unwrap();
+        doc.pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(field.into(), bad);
+        let parsed = parse(Path::new("bad.json"), &doc.to_string()).unwrap();
+        assert!(
+            normalize(&parsed).is_err(),
+            "accepted malformed field {pointer}"
+        );
+    }
+}
+
+#[test]
+fn recursive_schema_validation_is_bounded_and_preserves_targets() {
+    let model = normalize_fixture("recursive-schemas.yaml").unwrap();
+    assert_eq!(
+        model.root.pointer("/components/schemas/Node/type"),
+        Some(&json!("object"))
+    );
+    let invalid = normalize_text(
+        "openapi: '3.0.3'\npaths: {}\ncomponents:\n  schemas:\n    A:\n      properties:\n        child:\n          $ref: '#/components/schemas/Missing'\n",
+    );
+    assert!(matches!(invalid, Err(ModelError::UnresolvedRef { .. })));
+    assert!(normalize_text("openapi: '3.0.3'\ncomponents: {}\n").is_err());
+    assert!(normalize_text("openapi: '3.1.0'\npaths: null\n").is_err());
+}
+
+#[test]
+fn long_reference_chains_fail_with_a_structured_limit_error() {
+    let mut schemas = serde_json::Map::new();
+    for n in 0..140 {
+        schemas.insert(
+            format!("S{n}"),
+            json!({"$ref":format!("#/components/schemas/S{}",n+1)}),
+        );
+    }
+    schemas.insert("S140".into(), json!({"type":"string"}));
+    let doc = json!({"openapi":"3.1.0","paths":{},"components":{"schemas":schemas}});
+    let parsed = parse(Path::new("chain.json"), &doc.to_string()).unwrap();
+    assert!(matches!(
+        normalize(&parsed),
+        Err(ModelError::TraversalLimit { .. })
+    ));
+}
